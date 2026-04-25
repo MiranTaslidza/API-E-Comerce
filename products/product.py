@@ -46,14 +46,6 @@ class HomeApplianceRequest(ProductRequest):
     brand: str
     energy_rating: str
 
-
-
-# funkcija za prikaz svih proizvoda
-@router.get('/', status_code=status.HTTP_200_OK)
-async def read_all(db: db_dependency):
-    return db.query(models.Product).all()
-
-
 # funkcija za dodavanje proizvoda
 # obuča
 @router.post("/footwear", status_code=status.HTTP_201_CREATED)
@@ -184,3 +176,27 @@ async def update_home_appliance(db: db_dependency, request: HomeApplianceRequest
     db.refresh(item)
     
     return item
+
+
+# funkcija za prikaz svih proizvoda
+@router.get('/', status_code=status.HTTP_200_OK)
+async def read_all(db: db_dependency):
+    return db.query(models.Product).all()
+
+# prikaz pojedinačnog proizvoda
+@router.get("/{product_id}", status_code=status.HTTP_200_OK)
+async def read_product(db: db_dependency, product_id: int = Path(..., gt=0)):
+    item = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
+    return item
+
+# funkcija za brisanje proizvoda
+@router.delete("/{product_id}", status_code=status.HTTP_200_OK)
+async def delete_product(db: db_dependency, product_id: int = Path(..., gt=0)):
+    item = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
+    db.delete(item)
+    db.commit()
+    return {"detail": "Proizvod je uspješno obrisan"}
