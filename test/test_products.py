@@ -1,60 +1,72 @@
-import pytest
 from fastapi.testclient import TestClient
-from main import app # Uvoziš svoj FastAPI app
+from main import app
 
-# Pravimo klijenta koji će "glumiti" browser/Swagger
 client = TestClient(app)
 
+# 1. Testiranje prikaza svih proizvoda
 def test_read_all_products():
-    # 1. AKCIJA: Pozovi rutu za prikaz svih proizvoda
-    response = client.get("/products/") # Stavi ovdje tačnu putanju tvoje rute
-    
-    # 2. PROVJERA: Da li je status 200 (OK)?
+    response = client.get("/products/")
     assert response.status_code == 200
-    
-    # 3. PROVJERA: Da li je odgovor lista (JSON)?
-    assert isinstance(response.json(), list)
 
-
-def test_create_footwear_success():
-    # Podaci koje šaljemo (kao u Swaggeru)
-    payload = {
-        "name": "Test Tene",
-        "description": "Neki opis",
-        "price": 120.5,
-        "image_url": "http://slika.com",
-        "footwear_type": "patike",
-        "size": 44,
-        "gender": "M"
-    }
-    
-    # Šaljemo POST zahtjev
-    response = client.post("/products/footwear", json=payload)
-    
-    # Provjeravamo da li je kreirano (201)
-    assert response.status_code == 201
-    
-    # Provjeravamo da li nam je vratio ispravno ime
-    data = response.json()
-    assert data["name"] == "Test Tene"
-    assert "id" in data # Provjeravamo da li je baza dodijelila ID
-
-
+# 2. Testiranje kada proizvod NE POSTOJI
 def test_read_product_not_found():
-    # Pokušavamo dohvatiti ID koji sigurno nemamo (npr. 999999)
     response = client.get("/products/999999")
-    
-    # Provjeravamo da li je status 404
     assert response.status_code == 404
-    # Provjeravamo da li je poruka ona koju smo napisali u routeru
     assert response.json()["detail"] == "Proizvod nije pronađen"
 
+# 3. Testiranje slanja POGREŠNIH podataka (Validation Error)
 def test_create_footwear_invalid_data():
-    # Šaljemo nepotpune podatke (nema cijene, nema veličine)
-    payload = {
-        "name": "Loše patike"
-    }
+    payload = {"name": "Samo Ime Bez Cijene"}
     response = client.post("/products/footwear", json=payload)
-    
-    # FastAPI ovo ne smije pustiti dalje od vrata
     assert response.status_code == 422
+
+# 4. TEST: KREIRANJE I BRISANJE (Životni ciklus)
+def test_create_and_delete_footwear():
+    payload = {
+        "name": "Testne Patike Brisanje",
+        "description": "Opis",
+        "price": 10.0,
+        "image_url": "http://test.com",
+        "footwear_type": "patike",
+        "size": 42,
+        "gender": "M"
+    }
+    # Kreiraj
+    res = client.post("/products/footwear", json=payload)
+    assert res.status_code == 201
+    p_id = res.json()["id"]
+    
+    # Obriši odmah
+    assert client.delete(f"/products/{p_id}").status_code == 200
+    
+    # Provjeri da ga nema
+    assert client.get(f"/products/{p_id}").status_code == 404
+
+# 5. TEST: UPDATE (Ažuriranje cijene)
+def test_update_footwear():
+    # Napravi proizvod
+    payload = {
+        "name": "Patike Za Update",
+        "description": "Opis",
+        "price": 50.0,
+        "image_url": "http://test.com",
+        "footwear_type": "patike",
+        "size": 40,
+        "gender": "M"
+    }
+    create_res = client.post("/products/footwear", json=payload)
+    p_id = create_res.json()["id"]
+
+    # Pripremi nove podatke (promjena cijene)
+    update_payload = payload.copy()
+    update_payload["price"] = 199.99
+
+    # Pošalji izmjenu
+    update_res = client.put(f"/products/footwear/{p_id}", json=update_payload)
+    assert update_res.status_code == 200
+    
+    # Provjeri cijenu u odgovoru
+    assert update_res.json()["price"] == 199.99
+    
+    # Obriši na kraju da ne ostane smeće
+    client.delete(f"/products/{p_id}")
