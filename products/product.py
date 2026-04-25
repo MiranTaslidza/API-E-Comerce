@@ -113,3 +113,74 @@ async def create_home_appliance(db: db_dependency, request: HomeApplianceRequest
     return new_item
 
 
+
+# update proizvoda
+#obuća
+@router.put("/footwear/{product_id}", status_code=status.HTTP_200_OK)
+async def update_footwear(db: db_dependency, request: FootwearRequest, product_id: int = Path(..., gt=0)):
+    # 1. Pronađi proizvod u bazi
+    item = db.query(models.Footwear).filter(models.Footwear.id == product_id).first()
+    
+    # 2. Ako ga nema, prekini i javi grešku
+    if not item:
+        raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
+
+    # 3. MAGIJA: Uzmi sve podatke iz request-a (Pydantic) i pretvori ih u "rječnik" (dict)
+    podaci_iz_zahtjeva = request.model_dump()
+
+    # Ovdje osiguravamo da se tip nikada ne mijenja
+    podaci_iz_zahtjeva.pop('footwear_type', None)
+
+    # 4. Prođi kroz svaku stavku (npr. 'name', 'price', 'size') i dodijeli je proizvodu
+    for kljuc, vrijednost in podaci_iz_zahtjeva.items():
+        setattr(item, kljuc, vrijednost)
+
+    # 5. Spasi u bazu
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    
+    return item
+
+#odjeća
+@router.put("/clothing/{product_id}", status_code=status.HTTP_200_OK)
+async def update_clothing(db: db_dependency, request: ClothingRequest, product_id: int = Path(..., gt=0)):
+    item = db.query(models.Clothing).filter(models.Clothing.id == product_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
+
+    podaci_iz_zahtjeva = request.model_dump()
+
+    # Ovdje osiguravamo da se tip nikada ne mijenja
+    podaci_iz_zahtjeva.pop('clothing_type', None)
+
+
+    for kljuc, vrijednost in podaci_iz_zahtjeva.items():
+        setattr(item, kljuc, vrijednost)
+
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    
+    return item
+
+#bijela tehnika
+@router.put("/home_appliance/{product_id}", status_code=status.HTTP_200_OK)
+async def update_home_appliance(db: db_dependency, request: HomeApplianceRequest, product_id: int = Path(..., gt=0)):
+    item = db.query(models.HomeAppliance).filter(models.HomeAppliance.id == product_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
+
+    podaci_iz_zahtjeva = request.model_dump()
+
+    # Ovdje osiguravamo da se tip nikada ne mijenja
+    podaci_iz_zahtjeva.pop('appliance_type', None)
+
+    for kljuc, vrijednost in podaci_iz_zahtjeva.items():
+        setattr(item, kljuc, vrijednost)
+
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    
+    return item
