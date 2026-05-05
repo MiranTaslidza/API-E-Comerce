@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, status, HTTPException, Path
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -201,9 +203,6 @@ async def login_user(db: db_dependency, form_data: OAuth2PasswordRequestForm = D
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-
-
-
 # get current user funkcija koja koristi token da dohvati informacije o trenutno prijavljenom korisniku
 
 # 1. Definišemo šemu koja kaže FastAPI-ju gdje da traži token
@@ -238,6 +237,36 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: db
     return user
 
 
+# UPDATE KORISNIKA (samo vlasnik)
+@router.put("/{user_id}", status_code=status.HTTP_200_OK)
+async def update_user(db: db_dependency, user_id: int = Path(..., gt=0), user_update: UserCreate = None, current_user: models.User = Depends(get_current_user)):
+    # 1. PRONALAŽENJE KORISNIKA KOJEG ŽELIMO AŽURIRATI
+    user_to_update = db.query(models.User).filter(models.User.id == user_id).first()
+    
+    if not user_to_update:
+        raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
+    
+    # 2. PROVJERA DOZVOLE (Samo vlasnik može ažurirati svoj profil)
+    if current_user.id != user_to_update.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Nemate dozvolu za ažuriranje ovog naloga"
+        )
+    
+    # 3. AŽURIRANJE POLJA (ako su poslana)
+    if user_update.username:
+        user_to_update.username = user_update.username
+    if user_update.full_name is not None: # Dozvoljavamo i brisanje imena ako se pošalje null
+        user_to_update.full_name = user_update.full_name
+    if user_update.address is not None:
+        user_to_update.address = user_update.address
+    if user_update.date_of_birth is not None:
+        user_to_update.date_of_birth = user_update.date_of_birth
+    
+    db.commit() # Spasimo promjene u bazu
+    db.refresh(user_to_update) # Osvježimo objekat da dobijemo najnovije podatke
+    
+    return user_to_update
 
 
 #brisanje korisnika (samo vlasnik ili admin može obrisati nalog)
@@ -265,3 +294,101 @@ async def delete_user(db: db_dependency, user_id: int = Path(..., gt=0), current
     db.delete(user_to_delete)
     db.commit()
     # Kod 204 ne vraća body, pa return nije obavezan, ali može stajati
+
+
+#update maila (samo vlasnik)
+#################################
+
+
+# 1. Funkcija koja koristi tvoj Gmail API za slanje linkova
+def posalji_mail_za_promjenu(email: str, token: str, tip: str):
+    service = get_gmail_service()
+    
+    # Koristimo fiksne putanje da izbjegnemo konflikte sa ID-evima
+    ruta = "confirm-old-step" if tip == "stari" else "confirm-new-step"
+    link = f"http://localhost:8000/users/{ruta}/{token}"
+    
+    tekst = f"Kliknite na link za potvrdu promjene ({tip} email): {link}"
+    poruka = MIMEText(tekst)
+    poruka['to'] = email
+    poruka['subject'] = "Verifikacija promjene emaila"
+    
+    raw_message = base64.urlsafe_b64encode(poruka.as_bytes()).decode()
+    try:
+        service.users().messages().send(userId="me", body={'raw': raw_message}).execute()
+    except Exception as e:
+        print(f"Greška pri slanju: {e}")
+
+# --- RUTE ZA PROMJENU (Zalijepi ovo na kraj) ---
+
+# Korak 1: Zahtjev za promjenu (new_email šalješ kao običan tekst u Swaggeru)
+@router.post("/change-email-request")
+async def request_email_change(
+    new_email: str, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    # Provjera baze (koristi tvoj models.User)
+    if db.query(models.User).filter(models.User.email == new_email).first():
+        raise HTTPException(status_code=400, detail="Email je već u upotrebi.")
+
+    t_old = str(uuid.uuid4()) # Generišemo token za stari mail
+    t_new = str(uuid.uuid4()) # generišem token za novi mail
+
+    # Upis u tvoj EmailChangeRequest model
+    zahtjev = models.EmailChangeRequest(
+        user_id=current_user.id,
+        new_email=new_email,
+        token_old_email=t_old,
+        token_new_email=t_new,
+        is_old_email_confirmed=False,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
+    )
+    db.add(zahtjev)
+    db.commit()
+
+    # Šaljemo na TRENUTNI mail korisnika
+    posalji_mail_za_promjenu(current_user.email, t_old, "stari")
+    return {"message": "Potvrda poslana na vaš stari email."}
+
+# Korak 2: Potvrda na starom mailu
+@router.get("/confirm-old-step/{token}")
+async def confirm_old_step(token: str, db: Session = Depends(get_db)):
+    req = db.query(models.EmailChangeRequest).filter(models.EmailChangeRequest.token_old_email == token).first()
+    
+    if not req or req.is_old_email_confirmed:
+        raise HTTPException(status_code=400, detail="Token nevažeći ili iskorišten.")
+
+    req.is_old_email_confirmed = True
+    db.commit()
+
+    # Šaljemo na NOVI mail
+    posalji_mail_za_promjenu(req.new_email, req.token_new_email, "novi")
+    return {"message": "Stari mail potvrđen. Provjerite novi mail za kraj."}
+
+# Korak 3: Finalna potvrda i promjena u tabeli 'users'
+@router.get("/confirm-new-step/{token}")
+async def confirm_new_step(token: str, db: Session = Depends(get_db)):
+    req = db.query(models.EmailChangeRequest).filter(models.EmailChangeRequest.token_new_email == token).first()
+    
+    if not req or not req.is_old_email_confirmed:
+        raise HTTPException(status_code=400, detail="Niste potvrdili stari mail.")
+
+    korisnik = db.query(models.User).filter(models.User.id == req.user_id).first()
+    
+    # Spremanje u EmailHistory (tvoj model)
+    history = models.EmailHistory(
+        user_id=korisnik.id, 
+        old_email=korisnik.email,
+        changed_at=datetime.now(timezone.utc)
+    )
+    db.add(history)
+
+    # Konačna promjena
+    korisnik.email = req.new_email
+    
+    # Brisanje privremenog zahtjeva
+    db.delete(req)
+    db.commit()
+
+    return {"message": "Email je uspješno promijenjen!"}
