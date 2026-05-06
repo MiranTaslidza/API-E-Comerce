@@ -4,6 +4,10 @@ from sqlalchemy.orm import Session
 from typing import Annotated
 from database import SessionLocal
 from . import models
+# uvz get_current_user iz  user.py jer ćemo ga koristiti za provjeru da li je korisnik admin
+from user.user import get_current_user
+from user.models import User  # Uvozimo User klasu direktno
+
 
 router = APIRouter(
     prefix='/products',
@@ -46,10 +50,16 @@ class HomeApplianceRequest(ProductRequest):
     brand: str
     energy_rating: str
 
+
+##############################################################################
 # funkcija za dodavanje proizvoda
 # obuča
 @router.post("/footwear", status_code=status.HTTP_201_CREATED)
-async def create_footwear(db: db_dependency, request: FootwearRequest):
+async def create_footwear(db: db_dependency, request: FootwearRequest, current_user: User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+    
     # Kreiramo objekat Footwear
     # SQLAlchemy će sam vidjeti da je to Footwear i upisati "footwear" u bazu
     new_item = models.Footwear(
@@ -59,7 +69,8 @@ async def create_footwear(db: db_dependency, request: FootwearRequest):
         image_url=request.image_url,
         footwear_type=request.footwear_type,
         size=request.size,
-        gender=request.gender
+        gender=request.gender,
+        user_id=current_user.id  # OVO povezuje proizvod sa korisnikom 🔑
     )
     
     db.add(new_item)
@@ -69,7 +80,11 @@ async def create_footwear(db: db_dependency, request: FootwearRequest):
 
 # odjeća
 @router.post("/clothing", status_code=status.HTTP_201_CREATED)
-async def create_clothing(db: db_dependency, request: ClothingRequest):
+async def create_clothing(db: db_dependency, request: ClothingRequest, current_user: User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+
     new_item = models.Clothing(
         name=request.name,
         description=request.description,
@@ -78,7 +93,8 @@ async def create_clothing(db: db_dependency, request: ClothingRequest):
         clothing_type=request.clothing_type,
         size=request.size,
         gender=request.gender,
-        material=request.material
+        material=request.material,
+        user_id=current_user.id  # OVO povezuje proizvod sa korisnikom 🔑
     )
     
     db.add(new_item)
@@ -88,7 +104,11 @@ async def create_clothing(db: db_dependency, request: ClothingRequest):
 
 # bijela tehnika
 @router.post("/home_appliance", status_code=status.HTTP_201_CREATED)
-async def create_home_appliance(db: db_dependency, request: HomeApplianceRequest):  
+async def create_home_appliance(db: db_dependency, request: HomeApplianceRequest, current_user: User = Depends(get_current_user)):  
+    # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+
     new_item = models.HomeAppliance(
         name=request.name,
         description=request.description,
@@ -96,7 +116,8 @@ async def create_home_appliance(db: db_dependency, request: HomeApplianceRequest
         image_url=request.image_url,
         appliance_type=request.appliance_type,
         brand=request.brand,
-        energy_rating=request.energy_rating
+        energy_rating=request.energy_rating,
+        user_id=current_user.id  # OVO povezuje proizvod sa korisnikom 🔑
     )
     
     db.add(new_item)
@@ -109,7 +130,11 @@ async def create_home_appliance(db: db_dependency, request: HomeApplianceRequest
 # update proizvoda
 #obuća
 @router.put("/footwear/{product_id}", status_code=status.HTTP_200_OK)
-async def update_footwear(db: db_dependency, request: FootwearRequest, product_id: int = Path(..., gt=0)):
+async def update_footwear(db: db_dependency, request: FootwearRequest, product_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user)):
+        # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+    
     # 1. Pronađi proizvod u bazi
     item = db.query(models.Footwear).filter(models.Footwear.id == product_id).first()
     
@@ -136,7 +161,11 @@ async def update_footwear(db: db_dependency, request: FootwearRequest, product_i
 
 #odjeća
 @router.put("/clothing/{product_id}", status_code=status.HTTP_200_OK)
-async def update_clothing(db: db_dependency, request: ClothingRequest, product_id: int = Path(..., gt=0)):
+async def update_clothing(db: db_dependency, request: ClothingRequest, product_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+
     item = db.query(models.Clothing).filter(models.Clothing.id == product_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
@@ -158,7 +187,11 @@ async def update_clothing(db: db_dependency, request: ClothingRequest, product_i
 
 #bijela tehnika
 @router.put("/home_appliance/{product_id}", status_code=status.HTTP_200_OK)
-async def update_home_appliance(db: db_dependency, request: HomeApplianceRequest, product_id: int = Path(..., gt=0)):
+async def update_home_appliance(db: db_dependency, request: HomeApplianceRequest, product_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin ili seller
+    if current_user.role not in ['admin', 'seller']:
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za dodavanje proizvoda")
+
     item = db.query(models.HomeAppliance).filter(models.HomeAppliance.id == product_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
@@ -191,9 +224,15 @@ async def read_product(db: db_dependency, product_id: int = Path(..., gt=0)):
         raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
     return item
 
-# funkcija za brisanje proizvoda
+
+
+# funkcija za brisanje proizvoda dozvola samo adminu
 @router.delete("/{product_id}", status_code=status.HTTP_200_OK)
-async def delete_product(db: db_dependency, product_id: int = Path(..., gt=0)):
+async def delete_product(db: db_dependency, product_id: int = Path(..., gt=0), current_user: User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin
+    if current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Nemate dozvolu za brisanje proizvoda")
+
     item = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Proizvod nije pronađen")
