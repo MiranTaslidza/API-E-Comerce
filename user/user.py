@@ -15,16 +15,26 @@ from gmail_service import get_gmail_service # uvozimo tvoju skriptu
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
+import os
+from dotenv import load_dotenv
 
+# Ova linija "aktivira" tvoj .env fajl
+load_dotenv()
 
+###########################################################################################
+# --- UVOZ PODATAKA IZ .env ---
+# Za tekstualne vrijednosti (stringove)
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+# Za brojeve (moramo ih pretvoriti u int jer .env sve čita kao tekst)
+VERIFICATION_TOKEN_EXPIRE_HOURS = int(os.getenv("VERIFICATION_TOKEN_EXPIRE_HOURS", 24))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+# Uzimamo mail iz ENV i odmah skidamo nevidljive razmake i pretvaramo u mala slova
+admin_from_env = os.getenv("ADMIN_EMAILS", "").strip().lower()
+# Osnovna adresa za linkove u mailovima
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000") # 
+#########################################################################################
 
-#upisati neki slučajno generisani ključ
-SECRET_KEY = "DfDtSmX4lrTV2v2B6jPjDAqBVTSdjiapNKMtc3nRSLOp543qc78n9sXy2u"
-ALGORITHM = "HS256"
-
-# 1. Postavimo različita vremena isteka
-VERIFICATION_TOKEN_EXPIRE_HOURS = 24
-ACCESS_TOKEN_EXPIRE_MINUTES = 30 # Profesionalni standard je kraće vrijeme za login
 
 # 2. Univerzalna funkcija za kreiranje bilo kojeg JWT tokena
 def create_jwt_token(data: dict, expires_delta: timedelta = None):
@@ -45,7 +55,7 @@ def send_verification_email(email: str, token: str):
     service = get_gmail_service()
     
     # Link koji korisnik treba da klikne
-    verification_link = f"http://localhost:8000/users/verify/{token}"
+    verification_link = f"{BASE_URL}/users/verify/{token}"
     
     # Sadržaj maila
     message_text = f"Kliknite na link da potvrdite profil: {verification_link}"
@@ -97,16 +107,68 @@ def hash_password(password: str) -> str:
 
 db_dependency = Annotated[Session, Depends(get_db)] # dohvatanje podataka koje prosliđuje get_db funkcija
 
-# funkcija za prikaz svih korisnika
+# get current user funkcija koja koristi token da dohvati informacije o trenutno prijavljenom korisniku
+# 1. Definišemo šemu koja kaže FastAPI-ju gdje da traži token
+# tokenUrl je putanja do tvoje login funkcije
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="users/login")
+
+# 2. Funkcija koja provjerava ko je trenutno ulogovan
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: db_dependency):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Nije moguće potvrditi identitet",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        # Dekodiramo token koji nam je korisnik poslao
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        
+        if email is None:
+            raise credentials_exception
+            
+    except JWTError:
+        # Ako je token istekao ili je neko petljao po njemu
+        raise credentials_exception
+        
+    # Pronalazimo korisnika u bazi na osnovu emaila iz tokena
+    user = db.query(models.User).filter(models.User.email == email).first()
+    
+    if user is None:
+        raise credentials_exception
+        
+    return user
+
+
+######################################################
+#######################routeri########################
+# funkcija za prikaz svih korisnika 
+# izmjena da  samo admin ima pristup ovoj ruti
 @router.get("/", status_code=status.HTTP_200_OK)
-async def get_all_users(db: db_dependency):
+async def get_all_users(db: db_dependency, current_user: models.User = Depends(get_current_user)):
+    # Provjera da li je korisnik admin
+    if current_user.role != models.UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Samo admin može vidjeti sve korisnike")
+    
     users = db.query(models.User).all() # dohvaćanje svih korisnika iz baze
     return users # vraćanje korisnika
 
+# funkcija za prikaz jednog korisnika po ID-u vidi korisnik i admin
+@router.get("/{user_id}", status_code=status.HTTP_200_OK)
+async def get_user_by_id(user_id: int, db: db_dependency, current_user: models.User = Depends(get_current_user)):
+    # Provjera da li je korisnik i admin ili vlasnik profila
+    if current_user.role != models.UserRole.ADMIN and current_user.id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nemate dozvolu za pristup ovom profilu")
 
-# dodavanje novog korisnika
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Korisnik nije pronađen")
+    return user
+
+# krieranje novog korisnika
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_user(db: db_dependency, user: UserCreate):
+
     # provjera da li korisnik sa istim username-om ili email-om već postoji
     existing_user = db.query(models.User).filter(
         (models.User.username == user.username) | (models.User.email == user.email)
@@ -114,6 +176,23 @@ async def create_user(db: db_dependency, user: UserCreate):
     
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username or email already exists")
+    
+    # --- NOVO: LOGIKA ZA ADMIN PROVJERU ---
+    # 1. Dohvatamo string iz .env fajla i odmah ga čistimo (.strip() uklanja razmake, .lower() smanjuje slova)
+    # --- NOVO: LOGIKA ZA ADMIN PROVJERU ---
+    admin_email_env = os.getenv("ADMIN_EMAILS", "").strip().lower()
+    user_email_to_check = user.email.strip().lower()
+
+    # Dodajemo ovaj print da u terminalu VRLO JASNO vidiš poređenje
+    print(f"POREĐENJE: '{user_email_to_check}' == '{admin_email_env}'")
+
+    if user_email_to_check == admin_email_env:
+        print("MATCH PRONAĐEN!")
+        initial_role = models.UserRole.ADMIN
+    else:
+        print("NEMA MATCH-A!")
+        initial_role = models.UserRole.BUYER
+    # --------------------------------------
     
     # kreiranje novog korisnika
     new_user = models.User(
@@ -123,8 +202,8 @@ async def create_user(db: db_dependency, user: UserCreate):
         full_name=user.full_name,
         address=user.address,
         date_of_birth=user.date_of_birth,
-        # role će se automatski postaviti na default (BUYER)
-        role=models.UserRole.BUYER,
+        # Ovdje koristimo našu novu varijablu 'initial_role' umjesto fiksnog BUYER
+        role=initial_role,
         is_verified=False,
         is_active=True
     )
@@ -199,42 +278,7 @@ async def login_user(db: db_dependency, form_data: OAuth2PasswordRequestForm = D
         data={"sub": user.email, "role": user.role.value}, 
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    
     return {"access_token": access_token, "token_type": "bearer"}
-
-
-# get current user funkcija koja koristi token da dohvati informacije o trenutno prijavljenom korisniku
-
-# 1. Definišemo šemu koja kaže FastAPI-ju gdje da traži token
-# tokenUrl je putanja do tvoje login funkcije
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="users/login")
-
-# 2. Funkcija koja provjerava ko je trenutno ulogovan
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: db_dependency):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Nije moguće potvrditi identitet",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        # Dekodiramo token koji nam je korisnik poslao
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        
-        if email is None:
-            raise credentials_exception
-            
-    except JWTError:
-        # Ako je token istekao ili je neko petljao po njemu
-        raise credentials_exception
-        
-    # Pronalazimo korisnika u bazi na osnovu emaila iz tokena
-    user = db.query(models.User).filter(models.User.email == email).first()
-    
-    if user is None:
-        raise credentials_exception
-        
-    return user
 
 
 # UPDATE KORISNIKA (samo vlasnik)
@@ -298,15 +342,13 @@ async def delete_user(db: db_dependency, user_id: int = Path(..., gt=0), current
 
 #update maila (samo vlasnik)
 #################################
-
-
 # 1. Funkcija koja koristi tvoj Gmail API za slanje linkova
 def posalji_mail_za_promjenu(email: str, token: str, tip: str):
     service = get_gmail_service()
     
     # Koristimo fiksne putanje da izbjegnemo konflikte sa ID-evima
     ruta = "confirm-old-step" if tip == "stari" else "confirm-new-step"
-    link = f"http://localhost:8000/users/{ruta}/{token}"
+    link = f"{BASE_URL}/users/{ruta}/{token}"
     
     tekst = f"Kliknite na link za potvrdu promjene ({tip} email): {link}"
     poruka = MIMEText(tekst)
@@ -319,7 +361,7 @@ def posalji_mail_za_promjenu(email: str, token: str, tip: str):
     except Exception as e:
         print(f"Greška pri slanju: {e}")
 
-# --- RUTE ZA PROMJENU (Zalijepi ovo na kraj) ---
+
 
 # Korak 1: Zahtjev za promjenu (new_email šalješ kao običan tekst u Swaggeru)
 @router.post("/change-email-request")
@@ -392,3 +434,107 @@ async def confirm_new_step(token: str, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Email je uspješno promijenjen!"}
+
+from fastapi import Body
+
+# promjena lozinke (samo vlasnik)
+@router.post("/change-password")
+async def change_password(
+    old_password: str = Body(...), 
+    new_password: str = Body(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. PROVJERA STARE LOZINKE
+    # Upoređujemo unesenu staru lozinku sa onom iz baze (current_user.password_hash)
+    is_password_correct = bcrypt.checkpw(
+        old_password.encode('utf-8'), 
+        current_user.password_hash.encode('utf-8')
+    )
+    
+    if not is_password_correct:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Trenutna lozinka nije ispravna."
+        )
+
+    # 2. PROVJERA NOVE LOZINKE (da ne bude prazna)
+    if not new_password or len(new_password) < 6:
+        raise HTTPException(
+            status_code=400, 
+            detail="Nova lozinka mora imati najmanje 6 karaktera."
+        )
+
+    # 3. HASHIRANJE I SPAŠAVANJE
+    current_user.password_hash = hash_password(new_password)
+    db.commit()
+    
+    return {"message": "Lozinka je uspješno promijenjena!"}
+
+
+# zaboravljena  lozinka
+@router.post("/forgot-password")
+async def forgot_password(email: str = Body(...), db: Session = Depends(get_db)):
+    # 1. PRONALAŽENJE KORISNIKA
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
+    # 2. GENERISANJE TOKENA ZA RESET
+    token = create_jwt_token(
+        data={"sub": user.email, "purpose": "password_reset"}, 
+        expires_delta=timedelta(hours=1)
+    )
+    # 3. SLANJE MAILA SA LINKOM ZA RESET
+    reset_link = f"{BASE_URL}/users/reset-password/{token}"
+    message_text = f"Kliknite na link da resetirajte lozinku: {reset_link}"
+    message = MIMEText(message_text)
+    message['to'] = user.email
+    message['subject'] = "Reset lozinke - Moja Prodavnica"
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    try:
+        service = get_gmail_service()
+        service.users().messages().send(userId="me", body={'raw': raw_message}).execute()
+        return {"message": "Link za reset lozinke poslan na vaš email."}
+    except Exception as e:
+        print(f"Greška pri slanju: {e}")
+        raise HTTPException(status_code=500, detail="Greška pri slanju emaila.")
+
+# reset lozinke
+@router.post("/reset-password/{token}")
+async def reset_password(token: str, nova_lozinka: str, db: Session = Depends(get_db)):
+    try:
+        # 1. Dekodiramo tvoj postojeći token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        
+        # 2. Pronalazimo korisnika
+        user = db.query(models.User).filter(models.User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
+        
+        # 3. Upisujemo lozinku koju si proslijedio kao 'nova_lozinka'
+        user.password_hash = hash_password(nova_lozinka)
+        db.commit()
+        
+        return {"message": "Lozinka uspješno resetovana!"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Token nije ispravan ili je istekao")
+    
+# dodavanje rola (vrsi samo admin) role moraju imati padajucu listu (buyer, seller, admin)
+@router.post("/add-role/{user_id}")
+async def add_role(user_id: int, role: str = Body(...), db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != models.UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Samo admin može dodijeliti role")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
+
+    # ne dozvoljene role su 
+    if role not in ["buyer", "seller", "admin"]:
+        raise HTTPException(status_code=400, detail="Nevažeća rola. Dozvoljene role su: buyer, seller, admin")
+  
+    user.role = models.UserRole(role)
+    db.commit()
+    return {"message": f"Role '{role}' dodijeljena korisniku {user.username}."}
+
+    
