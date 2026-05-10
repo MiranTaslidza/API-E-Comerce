@@ -3,9 +3,6 @@ from sqlalchemy import Column, ForeignKey, Integer, String, Float, Table, DateTi
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 
-
-
-
 class Product(Base):
     __tablename__ = "products"
     
@@ -15,6 +12,8 @@ class Product(Base):
     price = Column(Float, nullable=False)     # Cijena 💰
     image_url = Column(String(255))           # Slika 🖼️
     quantity = Column(Integer, default=1)     # Količina 📦
+    # snizena cijena, ako je proizvod na popustu
+    discounted_price = Column(Float)          # Snižena cijena 💸
     #dodavanje datuma i vremena kreiranja i ažuriranja proizvoda
     created_at = Column(DateTime, default=datetime.now(timezone.utc)) # Kada je proizvod kreiran
     updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc)) # Kada je proizvod ažuriran  
@@ -78,11 +77,5 @@ class HomeAppliance(Product):
         "polymorphic_identity": "home_appliance",
     }
 
-# Veza između korisnika i proizvoda (wishlist)
-wishlist = Table(
-    "wishlist",
-    Base.metadata,
-    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True), # Veza između korisnika i proizvoda
-    Column("product_id", Integer, ForeignKey("products.id"), primary_key=True) # Veza između korisnika i proizvoda
-)
+
 
