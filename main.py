@@ -1,22 +1,26 @@
 from fastapi import FastAPI
-from database import engine
-from products.product import router as products_router
+from database import engine, Base # Uvezi Base direktno iz database
 import products.models
 import user.models
-from user.user import router as user_router
+import wishlist.models
 
-from wishlist import wishlist
+import cart.models # Ovo učitava klase CartItem i Order
+
+from products.product import router as products_router
+from user.user import router as user_router
 from wishlist.wishlist import router as wishlist_router
 
+from cart.cart import router as cart_router
 
 app = FastAPI()
-products.models.Base.metadata.create_all(bind=engine)
-user.models.Base.metadata.create_all(bind=engine)
-wishlist.models.Base.metadata.create_all(bind=engine)
 
+# Dovoljno je pozvati ovo JEDNOM. 
+# SQLAlchemy će proći kroz sve uvezene modele koji koriste ovaj Base i napraviti tabele.
+Base.metadata.create_all(bind=engine)
 
 # uključivanje routera
 app.include_router(user_router)
 app.include_router(products_router)
 app.include_router(wishlist_router)
 
+app.include_router(cart_router)

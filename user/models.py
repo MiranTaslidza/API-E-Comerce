@@ -4,6 +4,9 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime, Enum as SQLAl
 from database import Base
 from datetime import datetime, timezone
 
+# user/models.py
+from sqlalchemy.orm import relationship
+
 # 1. Definiramo listu dozvoljenih uloga
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
@@ -37,6 +40,10 @@ class User(Base):
     # Datumi (koristimo DateTime za lakše računanje vremena) 📅
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+
+    # Dodajemo ove dvije linije da povežemo modele 🔗
+    cart_items = relationship("CartItem", back_populates="user")
+    orders = relationship("Order", back_populates="user")
 
 # Model za zahtjev promjene emaila
 class EmailChangeRequest(Base):
