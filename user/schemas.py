@@ -25,3 +25,26 @@ class UserCreate(BaseModel):
     role: Optional[UserRole] = UserRole.BUYER 
 
     # Polja is_verified i is_active su UKLONJENA odavde jer ih kontroliše isključivo backend!
+
+
+# schema logina, gde korisnik šalje samo email i password
+class UserLogin(BaseModel):
+    username_or_email: str
+    password: str
+
+# schema promjena emaila
+class UserUpdateEmail(BaseModel):
+    new_email: EmailStr
+
+# schema promjena lozinke
+class UserUpdatePassword(BaseModel):
+    old_password: str
+    new_password: str
+
+# schemareset zaboravljene lozinke
+class ForgotPasswordSchema(BaseModel):
+    email: EmailStr
+
+class ResetPasswordSchema(BaseModel):
+    new_password: str
+    confirm_password: str

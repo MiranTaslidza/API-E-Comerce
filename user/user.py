@@ -6,14 +6,14 @@ from sqlalchemy.orm import Session
 from typing import Annotated
 from database import SessionLocal
 from . import models
-from .schemas import UserCreate
+from .schemas import UserCreate, UserLogin, UserUpdateEmail, UserUpdatePassword, ForgotPasswordSchema, ResetPasswordSchema
 import bcrypt
 from jose import jwt
 from datetime import datetime, timedelta , timezone
 import base64 # za kodiranje email poruka
 from email.mime.text import MIMEText # za kreiranje email poruka
 from gmail_service import get_gmail_service # uvozimo tvoju skriptu
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi.security import  OAuth2PasswordBearer
 from jose import jwt, JWTError
 import os
 from dotenv import load_dotenv
@@ -237,12 +237,12 @@ async def verify_user(token: str, db: db_dependency):
 
 # login
 @router.post("/login")
-async def login_user(db: db_dependency, form_data: OAuth2PasswordRequestForm = Depends()):
+async def login_user(db: db_dependency,  userLogin: UserLogin):
     # 1. PRONALAŽENJE KORISNIKA (Email ili Username)
     # Tražimo korisnika koji ima ili taj email ILI to korisničko ime
     user = db.query(models.User).filter(
-        (models.User.email == form_data.username) | 
-        (models.User.username == form_data.username)
+        (models.User.email == userLogin.username_or_email) | 
+        (models.User.username == userLogin.username_or_email)
     ).first()
     
     # Ako korisnik ne postoji, šaljemo grešku
@@ -252,7 +252,7 @@ async def login_user(db: db_dependency, form_data: OAuth2PasswordRequestForm = D
     # 2. PROVJERA LOZINKE (Bcrypt objašnjenje)
     # Password koji je korisnik upravo unio (form_data.password) upoređujemo sa onim iz baze
     is_password_correct = bcrypt.checkpw(
-        form_data.password.encode('utf-8'), # Pretvaramo unos u bajtove
+        userLogin.password.encode('utf-8'), # Pretvaramo unos u bajtove
         user.password_hash.encode('utf-8')  # Pretvaramo hash iz baze u bajtove
     )
     
@@ -341,13 +341,13 @@ def posalji_mail_za_promjenu(email: str, token: str, tip: str):
 
 # Korak 1: Zahtjev za promjenu (new_email šalješ kao običan tekst u Swaggeru)
 @router.post("/change-email-request")
-async def request_email_change(
-    new_email: str, 
+async def request_email_change( 
+    update_email: UserUpdateEmail,
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_user),
 ):
     # Provjera baze (koristi tvoj models.User)
-    if db.query(models.User).filter(models.User.email == new_email).first():
+    if db.query(models.User).filter(models.User.email == update_email.new_email).first():
         raise HTTPException(status_code=400, detail="Email je već u upotrebi.")
 
     t_old = str(uuid.uuid4()) # Generišemo token za stari mail
@@ -356,7 +356,7 @@ async def request_email_change(
     # Upis u tvoj EmailChangeRequest model
     zahtjev = models.EmailChangeRequest(
         user_id=current_user.id,
-        new_email=new_email,
+        new_email=update_email.new_email,
         token_old_email=t_old,
         token_new_email=t_new,
         is_old_email_confirmed=False,
@@ -416,16 +416,15 @@ async def confirm_new_step(token: str, db: Session = Depends(get_db)):
 # promjena lozinke (samo vlasnik)
 @router.post("/change-password")
 async def change_password(
-    old_password: str = Body(...), 
-    new_password: str = Body(...),
+    update_password: UserUpdatePassword,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # 1. PROVJERA STARE LOZINKE
     # Upoređujemo unesenu staru lozinku sa onom iz baze (current_user.password_hash)
     is_password_correct = bcrypt.checkpw(
-        old_password.encode('utf-8'), 
-        current_user.password_hash.encode('utf-8')
+        update_password.old_password.encode('utf-8'), # unesena stara lozinka u bajtovima
+        current_user.password_hash.encode('utf-8') # hash iz baze u bajtovima
     )
     
     if not is_password_correct:
@@ -435,23 +434,25 @@ async def change_password(
         )
 
     # 2. PROVJERA NOVE LOZINKE (da ne bude prazna)
-    if not new_password or len(new_password) < 6:
+    if not update_password.new_password or len(update_password.new_password) < 6:
         raise HTTPException(
             status_code=400, 
             detail="Nova lozinka mora imati najmanje 6 karaktera."
         )
 
     # 3. HASHIRANJE I SPAŠAVANJE
-    current_user.password_hash = hash_password(new_password)
+    current_user.password_hash = hash_password(update_password.new_password)
     db.commit()
     
     return {"message": "Lozinka je uspješno promijenjena!"}
 
 ################# zaboravljen password ##################
 @router.post("/forgot-password")
-async def forgot_password(email: str = Body(...), db: Session = Depends(get_db)):
+async def forgot_password(email: ForgotPasswordSchema, db: Session = Depends(get_db)):
+
     # 1. PRONALAŽENJE KORISNIKA
-    user = db.query(models.User).filter(models.User.email == email).first()
+    user = db.query(models.User).filter(models.User.email == email.email).first()
+    #user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
     # 2. GENERISANJE TOKENA ZA RESET
@@ -478,7 +479,7 @@ async def forgot_password(email: str = Body(...), db: Session = Depends(get_db))
 
 
 @router.post("/reset-password/{token}")
-async def reset_password(token: str, nova_lozinka: str, db: Session = Depends(get_db)):
+async def reset_password(token: str, reset_password: ResetPasswordSchema, db: Session = Depends(get_db)):
     try:
         # 1. Dekodiramo tvoj postojeći token
         payload = jwt.decode(token, secret_key_from_env, algorithms=[algorithm_from_env])
@@ -489,8 +490,8 @@ async def reset_password(token: str, nova_lozinka: str, db: Session = Depends(ge
         if not user:
             raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
         
-        # 3. Upisujemo lozinku koju si proslijedio kao 'nova_lozinka'
-        user.password_hash = hash_password(nova_lozinka)
+        # 3. Upisujemo lozinku koju si proslijedio kao 'reset_password.new_password'
+        user.password_hash = hash_password(reset_password.new_password)
         db.commit()
         
         return {"message": "Lozinka uspješno resetovana!"}
