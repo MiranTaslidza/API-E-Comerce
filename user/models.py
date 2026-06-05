@@ -40,6 +40,7 @@ class User(Base):
     # Statusi (koristimo Boolean jer je lakše za rad u Pythonu) ✅❌
     is_verified = Column(Boolean, default=False) 
     is_active = Column(Boolean, default=True) 
+    refresh_token = Column(String(500), nullable=True)
     
     # Datumi (koristimo DateTime za lakše računanje vremena) 📅
     created_at = Column(DateTime, default=datetime.now)

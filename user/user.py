@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import Annotated
 from database import SessionLocal
 from . import models
-from .schemas import UserCreate, UserLogin, UserUpdateEmail, UserUpdatePassword, ForgotPasswordSchema, ResetPasswordSchema
+from .schemas import UserCreate, UserLogin, UserUpdateEmail, UserUpdatePassword, ForgotPasswordSchema, ResetPasswordSchema, TokenRefreshRequest
 import bcrypt
 from jose import jwt
 from datetime import datetime, timedelta , timezone
@@ -238,8 +238,7 @@ async def verify_user(token: str, db: db_dependency):
 # login
 @router.post("/login")
 async def login_user(db: db_dependency,  userLogin: UserLogin):
-    # 1. PRONALAŽENJE KORISNIKA (Email ili Username)
-    # Tražimo korisnika koji ima ili taj email ILI to korisničko ime
+     # 1. PRONALAŽENJE KORISNIKA (Email ili Username)
     user = db.query(models.User).filter(
         (models.User.email == userLogin.username_or_email) | 
         (models.User.username == userLogin.username_or_email)
@@ -249,8 +248,7 @@ async def login_user(db: db_dependency,  userLogin: UserLogin):
     if not user:
         raise HTTPException(status_code=404, detail="Korisnik nije pronađen")
     
-    # 2. PROVJERA LOZINKE (Bcrypt objašnjenje)
-    # Password koji je korisnik upravo unio (form_data.password) upoređujemo sa onim iz baze
+     # 2. PROVJERA LOZINKE (Bcrypt objašnjenje)
     is_password_correct = bcrypt.checkpw(
         userLogin.password.encode('utf-8'), # Pretvaramo unos u bajtove
         user.password_hash.encode('utf-8')  # Pretvaramo hash iz baze u bajtove
@@ -269,7 +267,55 @@ async def login_user(db: db_dependency,  userLogin: UserLogin):
         expires_delta=timedelta(minutes=access_token_expire_minutes_from_env)
     )
     
-    return {"access_token": access_token, "token_type": "bearer"}
+    # ========================================================
+    # 🚨 NOVO: KREIRANJE I SPAŠAVANJE REFRESH TOKENA
+    # ========================================================
+    # Kreiramo dugotrajni refresh token koji važi 7 dana
+    refresh_token = create_jwt_token(
+        data={"sub": user.email, "type": "refresh"}, 
+        expires_delta=timedelta(days=7)
+    )
+    
+    # Upisujemo ovaj token u MySQL bazu (u kolonu koju smo dodali)
+    user.refresh_token = refresh_token
+    db.commit() 
+    # ========================================================
+    
+    # U return je dodan "refresh_token" kako bi ga frontend mogao preuzeti
+    return {
+        "access_token": access_token, 
+        "refresh_token": refresh_token,  # 🚨 DODANO
+        "token_type": "bearer"
+    }
+
+# refresh tokena
+@router.post("/refresh-token")
+async def refresh_token(payload: TokenRefreshRequest, db: Session = Depends(get_db)):
+    try:
+        # 2. Dekodiramo REFRESH token koji je frontend poslao
+        # (Zamijeni SECRET_KEY i ALGORITHM sa tvojim varijablama)
+        token_data = jwt.decode(payload.refresh_token, secret_key_from_env, algorithms=[algorithm_from_env])
+        user_email: str = token_data.get("sub")
+        
+        if user_email is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nevažeći token")
+            
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token je istekao ili je izmijenjen")
+
+    # 3. Tražimo korisnika u bazi i PROVJERAVAMO da li se token poklapa sa onim u bazi
+    user = db.query(models.User).filter(models.User.email == user_email).first()
+    
+    if not user or user.refresh_token != payload.refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token nije validan ili je povučen")
+
+    # 4. Ako je sve OK, tek tada pravimo NOVI access token
+    new_access_token = create_jwt_token(
+        data={"sub": user.email, "role": user.role.value}, 
+        expires_delta=timedelta(minutes=access_token_expire_minutes_from_env)
+    )
+
+    return {"access_token": new_access_token, "token_type": "bearer"}
 
 # UPDATE KORISNIKA (samo vlasnik)
 @router.put("/{user_id}", status_code=status.HTTP_200_OK)
@@ -542,3 +588,5 @@ async def delete_user(db: db_dependency, user_id: int = Path(..., gt=0), current
     db.delete(user)
     db.commit()
     return {"message": "User deleted successfully"}
+
+

@@ -48,3 +48,8 @@ class ForgotPasswordSchema(BaseModel):
 class ResetPasswordSchema(BaseModel):
     new_password: str
     confirm_password: str
+
+
+# 1. Napravimo brzu shemu za prihvat tokena sa frontenda
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
