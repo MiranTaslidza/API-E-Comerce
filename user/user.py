@@ -18,6 +18,9 @@ from jose import jwt, JWTError
 import os
 from dotenv import load_dotenv
 
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from fastapi.requests import Request
 
 
 # Ova linija "aktivira" tvoj .env fajl
@@ -35,6 +38,9 @@ router = APIRouter(
     prefix='/users',
     tags=['users']
 )
+
+# Definišemo gdje se nalazi templates folder (idemo jedan nivo unazad jer je user.py unutar user/ foldera)
+templates = Jinja2Templates(directory="templates")
 
 # 1. Definišemo šemu koja kaže FastAPI-ju gdje da traži token
 # tokenUrl je putanja do tvoje login funkcije
@@ -95,6 +101,17 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: db
         raise credentials_exception
         
     return user
+
+###############################
+######## templates html #######
+################################
+
+@router.get("/", response_class=HTMLResponse)
+async def prikaz_pocetne(request: Request):
+    # PRVI ARGUMENT: request objekat
+    # DRUGI ARGUMENT: naziv šablona u navodnicima
+    return templates.TemplateResponse(request, "user/index.html")
+
 
 
 ################# RUTE ZA KORISNIKE ##################
@@ -316,6 +333,13 @@ async def refresh_token(payload: TokenRefreshRequest, db: Session = Depends(get_
     )
 
     return {"access_token": new_access_token, "token_type": "bearer"}
+
+# logout
+@router.post("/logout")
+async def logout_user(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.refresh_token = None
+    db.commit()
+    return {"message": "Uspješno ste se odjavili!"}
 
 # UPDATE KORISNIKA (samo vlasnik)
 @router.put("/{user_id}", status_code=status.HTTP_200_OK)
