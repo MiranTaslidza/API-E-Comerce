@@ -115,9 +115,13 @@ if (loginLink) {
                     console.log("Uspješan login! Tokeni:", data);
                     // 1. Spremamo access_token u memoriju browsera
                     localStorage.setItem('access_token', data.access_token);
+                    
+                    
+                    document.cookie = `access_token=${data.access_token}; path=/; max-age=3600; SameSite=Lax`;//########
 
                     alert("Uspješan login!");
                     overlay.remove(); 
+                    window.location.href = "/users"; //##############################
                 })
                 .catch(error => {
                     console.error("Greška:", error.message);
